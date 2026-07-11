@@ -4,7 +4,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/curl-impersonate-cli.svg)](https://crates.io/crates/curl-impersonate-cli)
 [![docs.rs](https://img.shields.io/docsrs/curl-impersonate-cli)](https://docs.rs/curl-impersonate-cli)
-[![CI](https://github.com/TurtieSocks/curl-impersonate-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/TurtieSocks/curl-impersonate-rs/actions/workflows/ci.yml)
+[![CI](https://github.com/TurtieSocks/curl-impersonate-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/TurtieSocks/curl-impersonate-cli/actions/workflows/ci.yml)
 [![license](https://img.shields.io/crates/l/curl-impersonate-cli.svg)](./LICENSE)
 
 ## What & why
