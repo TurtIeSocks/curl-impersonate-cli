@@ -1,0 +1,42 @@
+# Changelog
+
+All notable changes to this project are documented here.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0] - 2026-07-11
+
+Initial release.
+
+### Added
+
+- Async subprocess wrapper around the [lexiforest/curl-impersonate](https://github.com/lexiforest/curl-impersonate)
+  `curl_chromeNNN` CLI wrappers, for HTTP requests with a byte-exact Chrome
+  TLS ClientHello + HTTP/2 fingerprint. One process per request; no native
+  build dependencies.
+- Builder API: `Request::get` / `Request::post`, with chainable setters
+  `header`, `headers`, `remove_header`, `cookies`, `body`, `proxy`,
+  `timeout_secs`, `insecure`, `max_filesize`, `follow_redirects`, and
+  `max_redirs`, terminated by `.send().await`.
+- Typed `Response` with `status`, `set_cookies` (raw `Set-Cookie` lines
+  accumulated across the redirect/`CONNECT` chain), `headers` (the final
+  response block), `body`, and `final_url` (`%{url_effective}`).
+- Header override semantics mirroring curl's `-H`: `header` *replaces* an
+  impersonation default of the same name; `remove_header` *drops* one — the
+  mechanism for turning navigation headers into a `fetch()`/CORS set without
+  disturbing the fingerprint.
+- `ProxySpec` proxy support with credentials passed via the `ALL_PROXY`
+  environment variable (owner-only) rather than argv (world-readable).
+- Argument-injection hardening: `--` terminates option parsing so a
+  caller-controlled URL cannot be interpreted as a curl flag (CWE-88).
+- Browser-faithful redirect handling: `follow_redirects` is opt-in, and a
+  POST that hits a 301/302/303 downgrades to a bodyless GET (no re-POST of
+  credentials across hops).
+- Optional `download` cargo feature exposing `download::ensure_binary` to
+  fetch + cache a prebuilt curl-impersonate release at runtime (Linux/macOS).
+
+[Unreleased]: https://github.com/TurtieSocks/curl-impersonate-rs/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/TurtieSocks/curl-impersonate-rs/releases/tag/v0.1.0

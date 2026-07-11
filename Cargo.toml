@@ -1,0 +1,45 @@
+[package]
+name = "curl-impersonate-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Async subprocess wrapper around the curl-impersonate CLI — byte-exact browser TLS/HTTP2 fingerprints via the curl_chromeNNN binaries, with a safe builder API."
+license = "MIT"
+readme = "README.md"
+keywords = ["curl", "impersonate", "tls", "fingerprint", "http"]
+categories = ["web-programming::http-client", "network-programming"]
+authors = ["Rin"]
+repository = "https://github.com/TurtieSocks/curl-impersonate-rs"
+homepage   = "https://github.com/TurtieSocks/curl-impersonate-rs"
+
+[lib]
+name = "curl_impersonate_cli"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Opt-in runtime download of a prebuilt curl-impersonate release into a cache
+# dir (Linux/macOS). Pulls in an HTTP client + tar/gzip extraction.
+download = ["dep:reqwest", "dep:flate2", "dep:tar", "dep:dirs", "tokio/fs"]
+
+[dependencies]
+tokio     = { version = "1", features = ["process", "io-util", "rt"] }
+thiserror = "2"
+
+# `download` feature only — kept out of the default build.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+flate2  = { version = "1", optional = true }
+tar     = { version = "0.4", optional = true }
+dirs    = { version = "6", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# Only builds with the `download` feature (uses the download module).
+[[example]]
+name = "download_and_get"
+required-features = ["download"]
+
+[package.metadata.docs.rs]
+# Build docs with the download feature so its module is documented.
+all-features = true
