@@ -38,5 +38,5 @@ Initial release.
 - Optional `download` cargo feature exposing `download::ensure_binary` to
   fetch + cache a prebuilt curl-impersonate release at runtime (Linux/macOS).
 
-[Unreleased]: https://github.com/TurtieSocks/curl-impersonate-cli/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/TurtieSocks/curl-impersonate-cli/releases/tag/v0.1.0
+[Unreleased]: https://github.com/TurtIeSocks/curl-impersonate-cli/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/TurtIeSocks/curl-impersonate-cli/releases/tag/v0.1.0

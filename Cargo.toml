@@ -9,8 +9,8 @@ readme = "README.md"
 keywords = ["curl", "impersonate", "tls", "fingerprint", "http"]
 categories = ["web-programming::http-client", "network-programming"]
 authors = ["Rin"]
-repository = "https://github.com/TurtieSocks/curl-impersonate-cli"
-homepage   = "https://github.com/TurtieSocks/curl-impersonate-cli"
+repository = "https://github.com/TurtIeSocks/curl-impersonate-cli"
+homepage   = "https://github.com/TurtIeSocks/curl-impersonate-cli"
 
 [lib]
 name = "curl_impersonate_cli"
