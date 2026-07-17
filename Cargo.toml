@@ -21,6 +21,10 @@ default = []
 # Opt-in runtime download of a prebuilt curl-impersonate release into a cache
 # dir (Linux/macOS). Pulls in an HTTP client + tar/gzip extraction.
 download = ["dep:reqwest", "dep:flate2", "dep:tar", "dep:dirs", "tokio/fs"]
+# Build the `curl-impersonate-mcp` stdio MCP server binary, exposing the request
+# API as tools for LLM agents. Pulls in the rmcp SDK; enables `download` so the
+# server can fetch a wrapper on first use. Off the default (library) build.
+mcp = ["download", "dep:rmcp", "dep:serde", "tokio/rt-multi-thread", "tokio/macros"]
 
 [dependencies]
 tokio     = { version = "1", features = ["process", "io-util", "rt"] }
@@ -32,6 +36,11 @@ flate2  = { version = "1", optional = true }
 tar     = { version = "0.4", optional = true }
 dirs    = { version = "6", optional = true }
 
+# `mcp` feature only. rmcp re-exports `schemars`, so we derive tool schemas via
+# `rmcp::schemars` and don't depend on it directly.
+rmcp  = { version = "2", features = ["server", "macros", "transport-io"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
@@ -40,6 +49,15 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 name = "download_and_get"
 required-features = ["download"]
 
+# The MCP server binary. Only builds with the `mcp` feature, keeping rmcp and its
+# transitive deps out of the default library build.
+[[bin]]
+name = "curl-impersonate-mcp"
+path = "src/bin/mcp.rs"
+required-features = ["mcp"]
+
 [package.metadata.docs.rs]
-# Build docs with the download feature so its module is documented.
-all-features = true
+# Build docs with the download feature so its module is documented. Not
+# `all-features`: the `mcp` feature only adds a binary (rmcp SDK), nothing the
+# library docs need, so keep it out of the docs build.
+features = ["download"]

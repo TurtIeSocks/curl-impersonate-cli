@@ -172,6 +172,34 @@ Credentials are handed to curl through the **`ALL_PROXY` environment variable, n
 | Feature    | Default | Description                                                                                                 |
 | ---------- | :-----: | ----------------------------------------------------------------------------------------------------------- |
 | `download` |    no   | Adds `download::ensure_binary` to fetch + cache a prebuilt curl-impersonate release at runtime (Linux/macOS). Pulls in `reqwest` (rustls), `flate2`, `tar`, and `dirs`. |
+| `mcp`      |    no   | Builds the `curl-impersonate-mcp` binary — a stdio [MCP](https://modelcontextprotocol.io) server exposing the request API as tools for LLM agents. Pulls in the `rmcp` SDK and implies `download`. See [MCP server](#mcp-server-for-agents). |
+
+## MCP server (for agents)
+
+The `mcp` feature builds a small [Model Context Protocol](https://modelcontextprotocol.io) server, `curl-impersonate-mcp`, that hands the request API to an LLM agent as tools — so an agent can fetch pages behind TLS/HTTP2 fingerprinting without you writing glue.
+
+```sh
+cargo install curl-impersonate-cli --features mcp   # installs the `curl-impersonate-mcp` binary
+# or, from a checkout:
+cargo run --features mcp --bin curl-impersonate-mcp
+```
+
+It speaks MCP over **stdio**. Register it with your agent — for Claude Code:
+
+```sh
+claude mcp add curl-impersonate -- curl-impersonate-mcp
+```
+
+Two tools are exposed:
+
+| Tool | What it does |
+| ---- | ------------ |
+| `curl_impersonate_fetch` | Make a GET/POST request with a byte-exact browser fingerprint. Params: `url`, `browser` (default `chrome146`), `method`, `headers` (map), `remove_headers`, `cookies` (map), `body`, `proxy_url`, `timeout_secs`, `insecure`, `follow_redirects`, `max_redirs`, `max_filesize`, `max_body_chars`. Returns `status`, `set_cookies`, `headers`, `body`, `final_url`, and the `used_bin`. A non-2xx status is returned normally — only transport/spawn failures error. |
+| `curl_impersonate_ensure_browser` | Download + cache a `curl_<browser>` wrapper and return its path (to reuse as a later `bin`). Params: `browser`, `version`. |
+
+**No manual install needed:** if the requested `curl_<browser>` wrapper isn't on `PATH`, `fetch` downloads and caches it on first use (Linux/macOS; the `mcp` feature implies `download`). The returned `used_bin` is the path it landed on — pass it back as `bin` to skip the lookup next time.
+
+Header override semantics match the [library's](#header-semantics): a header in `headers` *replaces* the impersonation default of that name; a name in `remove_headers` *drops* one.
 
 ## How it compares
 

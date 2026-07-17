@@ -61,6 +61,31 @@ jobs:
       - name: Clippy (download)
         run: cargo clippy --features download --all-targets -- -D warnings
 
+  # The `mcp` feature builds the MCP server binary (rmcp SDK + transitive deps),
+  # so it is built, linted, and tested separately from the default set.
+  mcp-feature:
+    name: mcp feature
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build (mcp)
+        run: cargo build --features mcp
+
+      - name: Clippy (mcp)
+        run: cargo clippy --features mcp --all-targets -- -D warnings
+
+      - name: Tests (mcp)
+        run: cargo test --features mcp --bin curl-impersonate-mcp
+
   # Confirm the crate still builds on its declared MSRV (Cargo.toml
   # `rust-version`). Nice-to-have; keep in sync with that field.
   msrv:
