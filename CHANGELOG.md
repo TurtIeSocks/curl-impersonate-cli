@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Optional `mcp` cargo feature building a `curl-impersonate-mcp` binary — a
+  stdio [Model Context Protocol](https://modelcontextprotocol.io) server (built
+  on the `rmcp` SDK) that exposes the request API as tools for LLM agents:
+  - `curl_impersonate_fetch` — GET/POST with a byte-exact browser fingerprint,
+    overriding headers/cookies/body/proxy; returns typed status, cookies,
+    headers, body (context-capped via `max_body_chars`), and `final_url`.
+  - `curl_impersonate_ensure_browser` — download + cache a `curl_<browser>`
+    wrapper and return its path.
+
+  The `mcp` feature implies `download`, so `fetch` self-bootstraps a missing
+  wrapper on first use. Kept off the default library build.
+
 ## [0.1.0] - 2026-07-11
 
 Initial release.
