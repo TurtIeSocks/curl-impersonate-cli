@@ -1,6 +1,6 @@
 [package]
 name = "curl-impersonate-cli"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Async subprocess wrapper around the curl-impersonate CLI — byte-exact browser TLS/HTTP2 fingerprints via the curl_chromeNNN binaries, with a safe builder API."
