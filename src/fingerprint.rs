@@ -46,6 +46,10 @@ pub enum FingerprintError {
     MalformedJa3 { input: String, reason: String },
     #[error("malformed Akamai fingerprint {input:?}: {reason}")]
     MalformedAkamai { input: String, reason: String },
+    /// The capture JSON was not valid JSON (only reachable via the `json`
+    /// feature's [`Fingerprint::from_capture_json`]).
+    #[error("invalid capture JSON: {0}")]
+    InvalidCaptureJson(String),
 }
 
 /// A decomposed browser/target fingerprint. Build with [`Fingerprint::builder`]
@@ -195,8 +199,18 @@ impl Fingerprint {
             a.push(names.join(":"));
         }
 
-        // 5. Extension order — only when NOT permuting.
-        if !self.permute_extensions && !self.extension_order.is_empty() {
+        // 5. Extension order. Skip entirely on the baseline+overlay path: a
+        // `--impersonate <base>` baseline already owns the extension set, its
+        // order, AND its permutation behavior (Chrome/Firefox permute per
+        // connection; Safari does not). Pinning an order captured from a single
+        // ClientHello snapshot would override that — freezing a value real
+        // Chrome varies every connection, a detectable tell. Only pin the order
+        // for from-scratch synthesis (no baseline), and even then not while
+        // permuting, since the two are contradictory.
+        if self.base_target.is_none()
+            && !self.permute_extensions
+            && !self.extension_order.is_empty()
+        {
             a.push("--tls-extension-order".into());
             a.push(
                 self.extension_order
@@ -621,10 +635,8 @@ impl Fingerprint {
     /// Available with the `json` feature.
     pub fn from_capture_json(json: &str) -> Result<Fingerprint, FingerprintError> {
         use serde_json::Value;
-        let v: Value = serde_json::from_str(json).map_err(|e| FingerprintError::MalformedJa3 {
-            input: "<capture json>".to_string(),
-            reason: format!("invalid JSON: {e}"),
-        })?;
+        let v: Value = serde_json::from_str(json)
+            .map_err(|e| FingerprintError::InvalidCaptureJson(e.to_string()))?;
 
         let tls = v.get("tls").unwrap_or(&Value::Null);
         let captured = tls.get("captured").unwrap_or(&Value::Null);
@@ -856,8 +868,23 @@ mod tests {
             )
         );
         assert_eq!(arg_after(&args, "--curves"), Some("X25519:P-256"));
-        assert_eq!(arg_after(&args, "--tls-extension-order"), Some("0-11-10"));
+        // With a baseline, the extension order (and permutation) is owned by
+        // `--impersonate`; the overlay must NOT pin it.
+        assert!(!args.iter().any(|a| a == "--tls-extension-order"));
         assert!(args.iter().any(|a| a == "--tlsv1.2"));
+    }
+
+    #[test]
+    fn to_args_from_scratch_pins_extension_order() {
+        // No base_target => from-scratch synthesis, where the order matters and
+        // there is no baseline to permute, so it IS pinned.
+        let fp = Fingerprint::builder()
+            .ja3("771,4865-4866,0-11-10,29-23,0")
+            .unwrap()
+            .build();
+        let args = fp.to_args().unwrap();
+        assert!(!args.iter().any(|a| a == "--impersonate"));
+        assert_eq!(arg_after(&args, "--tls-extension-order"), Some("0-11-10"));
     }
 
     #[test]
@@ -1060,6 +1087,25 @@ mod json_tests {
             args.windows(2)
                 .any(|w| w[0] == "--http2-window-update" && w[1] == "15663105")
         );
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "--http2-pseudo-headers-order" && w[1] == "masp")
+        );
+        // sig-hash ids decode to their RFC 8446 names, ','-joined.
+        assert_eq!(
+            args.iter()
+                .position(|a| a == "--signature-hashes")
+                .and_then(|i| args.get(i + 1))
+                .map(|s| s.as_str()),
+            Some("ecdsa_secp256r1_sha256,rsa_pss_rsae_sha256,rsa_pkcs1_sha256")
+        );
+        // Baseline owns extension order + permutation: the overlay must NOT pin
+        // a `--tls-extension-order` captured from one ClientHello snapshot
+        // (real Chrome permutes it per connection). See to_args rule 5.
+        assert!(
+            !args.iter().any(|a| a == "--tls-extension-order"),
+            "baseline+overlay must not pin extension order: {args:?}"
+        );
     }
 
     #[test]
@@ -1070,6 +1116,12 @@ mod json_tests {
         let fp = Fingerprint::from_capture_json(json).unwrap();
         assert_eq!(fp.ciphers, vec![4865, 4866]); // from JA3, no raw arrays
         assert_eq!(fp.curves, vec![29, 23]);
+    }
+
+    #[test]
+    fn from_capture_json_rejects_invalid_json() {
+        let err = Fingerprint::from_capture_json("{not json").unwrap_err();
+        assert!(matches!(err, FingerprintError::InvalidCaptureJson(_)));
     }
 
     #[test]
