@@ -175,6 +175,111 @@ impl FingerprintBuilder {
     }
 }
 
+// Ported verbatim from curl_cffi/requests/impersonate.py::TLS_CIPHER_NAME_MAP
+// (IANA cipher id -> BoringSSL cipher name). All suites go in one `--ciphers`
+// list; BoringSSL accepts TLS 1.3 suite names there too.
+//
+// Only exercised by tests until `Fingerprint::to_args` (a later, out-of-scope
+// task) calls it; `#[allow(dead_code)]` silences the lint until it lands.
+#[allow(dead_code)]
+fn cipher_name(id: u16) -> Option<&'static str> {
+    Some(match id {
+        0x000A => "TLS_RSA_WITH_3DES_EDE_CBC_SHA",
+        0x002F => "TLS_RSA_WITH_AES_128_CBC_SHA",
+        0x0033 => "TLS_DHE_RSA_WITH_AES_128_CBC_SHA",
+        0x0035 => "TLS_RSA_WITH_AES_256_CBC_SHA",
+        0x0039 => "TLS_DHE_RSA_WITH_AES_256_CBC_SHA",
+        0x003C => "TLS_RSA_WITH_AES_128_CBC_SHA256",
+        0x003D => "TLS_RSA_WITH_AES_256_CBC_SHA256",
+        0x0067 => "TLS_DHE_RSA_WITH_AES_128_CBC_SHA256",
+        0x006B => "TLS_DHE_RSA_WITH_AES_256_CBC_SHA256",
+        0x008C => "TLS_PSK_WITH_AES_128_CBC_SHA",
+        0x008D => "TLS_PSK_WITH_AES_256_CBC_SHA",
+        0x009C => "TLS_RSA_WITH_AES_128_GCM_SHA256",
+        0x009D => "TLS_RSA_WITH_AES_256_GCM_SHA384",
+        0x009E => "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256",
+        0x009F => "TLS_DHE_RSA_WITH_AES_256_GCM_SHA384",
+        0x1301 => "TLS_AES_128_GCM_SHA256",
+        0x1302 => "TLS_AES_256_GCM_SHA384",
+        0x1303 => "TLS_CHACHA20_POLY1305_SHA256",
+        0xC008 => "TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA",
+        0xC009 => "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA",
+        0xC00A => "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA",
+        0xC012 => "TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA",
+        0xC013 => "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+        0xC014 => "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+        0xC023 => "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256",
+        0xC024 => "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384",
+        0xC027 => "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
+        0xC028 => "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384",
+        0xC02B => "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+        0xC02C => "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+        0xC02F => "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+        0xC030 => "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+        0xC035 => "TLS_ECDHE_PSK_WITH_AES_128_CBC_SHA",
+        0xC036 => "TLS_ECDHE_PSK_WITH_AES_256_CBC_SHA",
+        0xCCA8 => "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+        0xCCA9 => "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+        0xCCAC => "TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256",
+        _ => return None,
+    })
+}
+
+// Ported from curl_cffi TLS_EC_CURVES_MAP (supported-group id -> name).
+// Only exercised by tests until `to_args` (later task) calls it.
+#[allow(dead_code)]
+fn curve_name(id: u16) -> Option<&'static str> {
+    Some(match id {
+        19 => "P-192",
+        21 => "P-224",
+        23 => "P-256",
+        24 => "P-384",
+        25 => "P-521",
+        29 => "X25519",
+        256 => "ffdhe2048",
+        257 => "ffdhe3072",
+        4588 => "X25519MLKEM768",
+        25497 => "X25519Kyber768Draft00",
+        _ => return None,
+    })
+}
+
+// RFC 8446 §4.2.3 SignatureScheme id -> name accepted by
+// `--signature-hashes`. curl_cffi has no such map (it takes names from the
+// caller); built here for the raw-array path.
+// Only exercised by tests until `to_args` (later task) calls it.
+#[allow(dead_code)]
+fn sig_hash_name(id: u16) -> Option<&'static str> {
+    Some(match id {
+        0x0201 => "rsa_pkcs1_sha1",
+        0x0203 => "ecdsa_sha1",
+        0x0401 => "rsa_pkcs1_sha256",
+        0x0403 => "ecdsa_secp256r1_sha256",
+        0x0501 => "rsa_pkcs1_sha384",
+        0x0503 => "ecdsa_secp384r1_sha384",
+        0x0601 => "rsa_pkcs1_sha512",
+        0x0603 => "ecdsa_secp521r1_sha512",
+        0x0804 => "rsa_pss_rsae_sha256",
+        0x0805 => "rsa_pss_rsae_sha384",
+        0x0806 => "rsa_pss_rsae_sha512",
+        0x0807 => "ed25519",
+        0x0808 => "ed448",
+        0x0809 => "rsa_pss_pss_sha256",
+        0x080A => "rsa_pss_pss_sha384",
+        0x080B => "rsa_pss_pss_sha512",
+        _ => return None,
+    })
+}
+
+/// True for TLS GREASE values (`0x0A0A, 0x1A1A, … 0xFAFA`): both bytes equal
+/// and the low nibble is `0xA`. JA3 strings omit GREASE by convention; raw
+/// capture arrays include it and must be stripped (see `from_raw_arrays`).
+/// Only exercised by tests until `from_raw_arrays` (later task) calls it.
+#[allow(dead_code)]
+fn is_grease(v: u16) -> bool {
+    (v & 0xFF) == (v >> 8) && (v & 0x0F) == 0x0A
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +302,45 @@ mod tests {
         assert_eq!(fp.base_target.as_deref(), Some("chrome146"));
         assert_eq!(fp.user_agent.as_deref(), Some("UA/1.0"));
         assert!(fp.default_headers);
+    }
+
+    #[test]
+    fn cipher_names_map_known_ids() {
+        assert_eq!(cipher_name(0x1301), Some("TLS_AES_128_GCM_SHA256"));
+        assert_eq!(
+            cipher_name(0xC02B),
+            Some("TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256")
+        );
+        assert_eq!(cipher_name(0x002F), Some("TLS_RSA_WITH_AES_128_CBC_SHA"));
+        assert_eq!(cipher_name(0xDEAD), None);
+    }
+
+    #[test]
+    fn curve_names_map_known_ids() {
+        assert_eq!(curve_name(29), Some("X25519"));
+        assert_eq!(curve_name(23), Some("P-256"));
+        assert_eq!(curve_name(24), Some("P-384"));
+        assert_eq!(curve_name(4588), Some("X25519MLKEM768"));
+        assert_eq!(curve_name(9999), None);
+    }
+
+    #[test]
+    fn sig_hash_names_map_known_ids() {
+        assert_eq!(sig_hash_name(0x0403), Some("ecdsa_secp256r1_sha256"));
+        assert_eq!(sig_hash_name(0x0804), Some("rsa_pss_rsae_sha256"));
+        assert_eq!(sig_hash_name(0x0601), Some("rsa_pkcs1_sha512"));
+        assert_eq!(sig_hash_name(0xFFFF), None);
+    }
+
+    #[test]
+    fn grease_detection_matches_pattern() {
+        for g in [
+            0x0A0Au16, 0x1A1A, 0x2A2A, 0x3A3A, 0x8A8A, 0x9A9A, 0xFAFA, 0xAAAA,
+        ] {
+            assert!(is_grease(g), "{g:#06x} should be GREASE");
+        }
+        for real in [0x1301u16, 23, 4588, 0x002F, 771, 0xC02B] {
+            assert!(!is_grease(real), "{real:#06x} should not be GREASE");
+        }
     }
 }
