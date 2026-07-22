@@ -612,6 +612,88 @@ fn is_grease(v: u16) -> bool {
     (v & 0xFF) == (v >> 8) && (v & 0x0F) == 0x0A
 }
 
+#[cfg(feature = "json")]
+impl Fingerprint {
+    /// Parse a captured profile JSON into a [`Fingerprint`]. Reads `ua`,
+    /// `tls.tlsProfile`, `tls.captured.ja3`, `tls.captured.akamai`, and (when
+    /// present) the richer `tls.captured.raw.raw.*` arrays — **preferring the
+    /// raw arrays**, which carry signature algorithms and key shares JA3 omits.
+    /// Available with the `json` feature.
+    pub fn from_capture_json(json: &str) -> Result<Fingerprint, FingerprintError> {
+        use serde_json::Value;
+        let v: Value = serde_json::from_str(json).map_err(|e| FingerprintError::MalformedJa3 {
+            input: "<capture json>".to_string(),
+            reason: format!("invalid JSON: {e}"),
+        })?;
+
+        let tls = v.get("tls").unwrap_or(&Value::Null);
+        let captured = tls.get("captured").unwrap_or(&Value::Null);
+        let str_at =
+            |val: &Value, key: &str| val.get(key).and_then(|x| x.as_str()).map(str::to_string);
+
+        // Base target from `tlsProfile` (e.g. "Chrome_146" -> "chrome146").
+        let base_target = str_at(tls, "tlsProfile").map(|p| normalize_base_target(&p));
+        let user_agent = str_at(&v, "ua");
+        let ja3 = str_at(captured, "ja3");
+        let akamai = str_at(captured, "akamai");
+
+        // Prefer raw arrays under captured.raw.raw.*
+        let raw_root = captured.get("raw").and_then(|r| r.get("raw"));
+        let arr = |key: &str| -> Vec<u16> {
+            raw_root
+                .and_then(|r| r.get(key))
+                .and_then(|x| x.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|n| n.as_u64().map(|n| n as u16))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        let mut fp = if raw_root.is_some() {
+            Fingerprint::from_raw_arrays(RawArrays {
+                ciphers: arr("ciphers"),
+                extensions: arr("extensions"),
+                supported_groups: arr("supported_groups"),
+                signature_algorithms: arr("signature_algorithms"),
+                supported_versions: arr("supported_versions"),
+            })
+        } else {
+            let mut b = Fingerprint::builder();
+            if let Some(j) = &ja3 {
+                b = b.ja3(j)?;
+            }
+            b.build()
+        };
+
+        // HTTP/2 always comes from the akamai string.
+        if let Some(ak) = &akamai {
+            let h2 = Fingerprint::builder().akamai(ak)?.build();
+            fp.h2_settings = h2.h2_settings;
+            fp.h2_window_update = h2.h2_window_update;
+            fp.h2_streams = h2.h2_streams;
+            fp.h2_pseudo_order = h2.h2_pseudo_order;
+        }
+
+        fp.base_target = base_target;
+        fp.user_agent = user_agent;
+        Ok(fp)
+    }
+}
+
+/// Normalize a capture's `tlsProfile` (e.g. `"Chrome_146"`) to a
+/// curl-impersonate target name (`"chrome146"`): lowercased, `_`/spaces/dots
+/// removed.
+#[cfg(feature = "json")]
+fn normalize_base_target(profile: &str) -> String {
+    profile
+        .chars()
+        .filter(|c| !matches!(c, '_' | ' ' | '.'))
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -922,5 +1004,77 @@ mod tests {
         assert_eq!(fp.sig_hash_algs, vec![1027, 2052]);
         // lowest non-GREASE supported version wins as the min (771 = TLS 1.2).
         assert_eq!(fp.tls_version_min, Some(771));
+    }
+}
+
+#[cfg(all(test, feature = "json"))]
+mod json_tests {
+    use super::*;
+
+    const CAPTURE: &str = r#"{
+      "ua": "Mozilla/5.0 (Linux; Android 10; K) Chrome/149.0.0.0 Mobile Safari/537.36",
+      "tls": {
+        "tlsProfile": "Chrome_146",
+        "captured": {
+          "akamai": "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
+          "ja3": "771,4865-4866-4867-49195,65037-35-23-10,4588-29-23-24,0",
+          "raw": { "raw": {
+            "ciphers": [64250, 4865, 4866, 4867, 49195],
+            "extensions": [39578, 65037, 35, 23, 10],
+            "supported_groups": [14906, 4588, 29, 23, 24],
+            "signature_algorithms": [1027, 2052, 1025],
+            "supported_versions": [43690, 772, 771]
+          }}
+        }
+      }
+    }"#;
+
+    #[test]
+    fn from_capture_json_prefers_raw_arrays_and_maps_all() {
+        let fp = Fingerprint::from_capture_json(CAPTURE).unwrap();
+        assert_eq!(fp.base_target.as_deref(), Some("chrome146"));
+        assert!(fp.user_agent.as_deref().unwrap().contains("Chrome/149"));
+        assert!(fp.grease, "GREASE seen in raw arrays");
+        // raw arrays win (GREASE stripped), not the JA3 string.
+        assert_eq!(fp.curves, vec![4588, 29, 23, 24]);
+        assert_eq!(fp.sig_hash_algs, vec![1027, 2052, 1025]);
+
+        let args = fp.to_args().unwrap();
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "--impersonate" && w[1] == "chrome146")
+        );
+        assert!(args.iter().any(|a| a == "--tls-grease"));
+        assert_eq!(
+            args.iter()
+                .position(|a| a == "--curves")
+                .and_then(|i| args.get(i + 1))
+                .map(|s| s.as_str()),
+            Some("X25519MLKEM768:X25519:P-256:P-384")
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "--http2-settings" && w[1] == "1:65536;2:0;4:6291456;6:262144")
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "--http2-window-update" && w[1] == "15663105")
+        );
+    }
+
+    #[test]
+    fn from_capture_json_falls_back_to_ja3_without_raw() {
+        let json = r#"{"ua":"UA","tls":{"tlsProfile":"Chrome_146",
+          "captured":{"ja3":"771,4865-4866,0-11-10,29-23,0",
+          "akamai":"1:65536|15663105|0|m,a,s,p"}}}"#;
+        let fp = Fingerprint::from_capture_json(json).unwrap();
+        assert_eq!(fp.ciphers, vec![4865, 4866]); // from JA3, no raw arrays
+        assert_eq!(fp.curves, vec![29, 23]);
+    }
+
+    #[test]
+    fn normalize_base_target_examples() {
+        assert_eq!(normalize_base_target("Chrome_146"), "chrome146");
+        assert_eq!(normalize_base_target("Safari_18.4"), "safari184");
     }
 }
