@@ -346,6 +346,56 @@ impl Fingerprint {
     }
 }
 
+/// Decomposed raw ClientHello arrays (numeric ids, GREASE included) as captured
+/// by a harvester. Feed to [`Fingerprint::from_raw_arrays`]; it is the
+/// high-fidelity path (carries sig-algs and key shares that JA3 lacks).
+#[derive(Debug, Clone, Default)]
+pub struct RawArrays {
+    pub ciphers: Vec<u16>,
+    pub extensions: Vec<u16>,
+    pub supported_groups: Vec<u16>,
+    pub signature_algorithms: Vec<u16>,
+    pub supported_versions: Vec<u16>,
+}
+
+impl Fingerprint {
+    /// Build a fingerprint from raw ClientHello arrays, stripping GREASE from
+    /// every list and setting `grease` when any is seen. Other fields keep their
+    /// defaults; set the baseline via `base_target` and any extra_fp toggles
+    /// afterwards.
+    pub fn from_raw_arrays(raw: RawArrays) -> Fingerprint {
+        let mut grease = false;
+        let mut strip = |v: &[u16]| -> Vec<u16> {
+            v.iter()
+                .copied()
+                .filter(|&x| {
+                    let g = is_grease(x);
+                    grease |= g;
+                    !g
+                })
+                .collect()
+        };
+
+        let ciphers = strip(&raw.ciphers);
+        let extension_order = strip(&raw.extensions);
+        let curves = strip(&raw.supported_groups);
+        let sig_hash_algs = strip(&raw.signature_algorithms);
+        let versions = strip(&raw.supported_versions);
+        // Min TLS version = lowest advertised (non-GREASE) supported_version.
+        let tls_version_min = versions.iter().copied().min();
+
+        Fingerprint {
+            ciphers,
+            extension_order,
+            curves,
+            sig_hash_algs,
+            tls_version_min,
+            grease,
+            ..Fingerprint::default()
+        }
+    }
+}
+
 /// Builder for [`Fingerprint`]. Setters that parse fingerprint strings
 /// (`ja3`/`akamai`/`perk`) are added in later tasks and return `Result`.
 #[derive(Debug, Clone)]
@@ -558,8 +608,6 @@ fn sig_hash_name(id: u16) -> Option<&'static str> {
 /// True for TLS GREASE values (`0x0A0A, 0x1A1A, … 0xFAFA`): both bytes equal
 /// and the low nibble is `0xA`. JA3 strings omit GREASE by convention; raw
 /// capture arrays include it and must be stripped (see `from_raw_arrays`).
-/// Only exercised by tests until `from_raw_arrays` (later task) calls it.
-#[allow(dead_code)]
 fn is_grease(v: u16) -> bool {
     (v & 0xFF) == (v >> 8) && (v & 0x0F) == 0x0A
 }
@@ -854,5 +902,25 @@ mod tests {
             Some("host,user-agent")
         );
         assert!(args.iter().any(|a| a == "--proxy-credential-no-reuse"));
+    }
+
+    #[test]
+    fn from_raw_arrays_strips_grease_and_sets_fields() {
+        // Values taken from the android-chrome-149 capture.
+        let raw = RawArrays {
+            ciphers: vec![64250, 4865, 4866, 4867, 49195], // 64250 = 0xFAFA GREASE
+            extensions: vec![39578, 0, 43, 35466],         // 39578/35466 GREASE
+            supported_groups: vec![14906, 4588, 29, 23, 24], // 14906 GREASE
+            signature_algorithms: vec![1027, 2052],        // 0x0403, 0x0804
+            supported_versions: vec![43690, 772, 771],     // 43690 GREASE
+        };
+        let fp = Fingerprint::from_raw_arrays(raw);
+        assert!(fp.grease);
+        assert_eq!(fp.ciphers, vec![4865, 4866, 4867, 49195]);
+        assert_eq!(fp.extension_order, vec![0, 43]);
+        assert_eq!(fp.curves, vec![4588, 29, 23, 24]);
+        assert_eq!(fp.sig_hash_algs, vec![1027, 2052]);
+        // lowest non-GREASE supported version wins as the min (771 = TLS 1.2).
+        assert_eq!(fp.tls_version_min, Some(771));
     }
 }
