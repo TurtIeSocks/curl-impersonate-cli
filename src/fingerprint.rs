@@ -207,6 +207,47 @@ impl FingerprintBuilder {
         // curve_formats (parts[4]) is only ever `0`; ignored.
         Ok(self)
     }
+
+    /// Parse an Akamai HTTP/2 fingerprint
+    /// `settings|window_update|streams|pseudo_order`. Ported from curl_cffi
+    /// `set_akamai_options`. Settings may use `,` or `;` between pairs; pseudo
+    /// order `m,a,s,p` becomes `masp`.
+    pub fn akamai(mut self, akamai: &str) -> Result<Self, FingerprintError> {
+        let malformed = |reason: &str| FingerprintError::MalformedAkamai {
+            input: akamai.to_string(),
+            reason: reason.to_string(),
+        };
+        let parts: Vec<&str> = akamai.split('|').collect();
+        if parts.len() != 4 {
+            return Err(malformed("expected 4 pipe-separated fields"));
+        }
+
+        let mut settings = Vec::new();
+        if !parts[0].is_empty() {
+            for pair in parts[0].replace(',', ";").split(';') {
+                let (k, v) = pair
+                    .split_once(':')
+                    .ok_or_else(|| malformed("settings pair missing ':'"))?;
+                let k = k
+                    .parse::<u16>()
+                    .map_err(|_| malformed("non-numeric setting id"))?;
+                let v = v
+                    .parse::<u32>()
+                    .map_err(|_| malformed("non-numeric setting value"))?;
+                settings.push((k, v));
+            }
+        }
+        self.fp.h2_settings = settings;
+
+        self.fp.h2_window_update = Some(
+            parts[1]
+                .parse::<u32>()
+                .map_err(|_| malformed("non-numeric window_update"))?,
+        );
+        self.fp.h2_streams = Some(parts[2].to_string());
+        self.fp.h2_pseudo_order = Some(parts[3].replace(',', ""));
+        Ok(self)
+    }
 }
 
 // Ported verbatim from curl_cffi/requests/impersonate.py::TLS_CIPHER_NAME_MAP
@@ -404,5 +445,39 @@ mod tests {
     fn ja3_parser_rejects_malformed() {
         let err = Fingerprint::builder().ja3("771,4865,0-11").unwrap_err();
         assert!(matches!(err, FingerprintError::MalformedJa3 { .. }));
+    }
+
+    #[test]
+    fn akamai_parser_fills_http2_fields() {
+        let fp = Fingerprint::builder()
+            .akamai("1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p")
+            .unwrap()
+            .build();
+        assert_eq!(
+            fp.h2_settings,
+            vec![(1, 65536), (2, 0), (4, 6291456), (6, 262144)]
+        );
+        assert_eq!(fp.h2_window_update, Some(15663105));
+        assert_eq!(fp.h2_streams.as_deref(), Some("0"));
+        assert_eq!(fp.h2_pseudo_order.as_deref(), Some("masp"));
+    }
+
+    #[test]
+    fn akamai_parser_accepts_comma_settings_separator() {
+        // tls.peet.ws uses commas between settings; treat as semicolons.
+        let fp = Fingerprint::builder()
+            .akamai("1:65536,2:0|15663105|1:0:0:201|m,a,s,p")
+            .unwrap()
+            .build();
+        assert_eq!(fp.h2_settings, vec![(1, 65536), (2, 0)]);
+        assert_eq!(fp.h2_streams.as_deref(), Some("1:0:0:201"));
+    }
+
+    #[test]
+    fn akamai_parser_rejects_malformed() {
+        let err = Fingerprint::builder()
+            .akamai("1:65536|15663105")
+            .unwrap_err();
+        assert!(matches!(err, FingerprintError::MalformedAkamai { .. }));
     }
 }
