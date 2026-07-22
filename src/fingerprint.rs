@@ -173,6 +173,40 @@ impl FingerprintBuilder {
     pub fn build(self) -> Fingerprint {
         self.fp
     }
+
+    /// Parse a JA3 string `version,ciphers,extensions,curves,curve_formats` into
+    /// the TLS overlay fields. Ported from curl_cffi `set_ja3_options`. GREASE is
+    /// absent from JA3 by convention, so no stripping happens here.
+    pub fn ja3(mut self, ja3: &str) -> Result<Self, FingerprintError> {
+        let malformed = |reason: &str| FingerprintError::MalformedJa3 {
+            input: ja3.to_string(),
+            reason: reason.to_string(),
+        };
+        let parts: Vec<&str> = ja3.split(',').collect();
+        if parts.len() != 5 {
+            return Err(malformed("expected 5 comma-separated fields"));
+        }
+        let parse_u16 = |s: &str| s.parse::<u16>().map_err(|_| malformed("non-numeric field"));
+        let parse_list = |s: &str| -> Result<Vec<u16>, FingerprintError> {
+            if s.is_empty() {
+                return Ok(Vec::new());
+            }
+            s.split('-').map(parse_u16).collect()
+        };
+
+        self.fp.tls_version_min = Some(parse_u16(parts[0])?);
+        self.fp.ciphers = parse_list(parts[1])?;
+
+        let mut exts = parse_list(parts[2])?;
+        if exts.last() == Some(&21) {
+            exts.pop(); // padding: managed by the SSL engine
+        }
+        self.fp.extension_order = exts;
+
+        self.fp.curves = parse_list(parts[3])?;
+        // curve_formats (parts[4]) is only ever `0`; ignored.
+        Ok(self)
+    }
 }
 
 // Ported verbatim from curl_cffi/requests/impersonate.py::TLS_CIPHER_NAME_MAP
@@ -342,5 +376,33 @@ mod tests {
         for real in [0x1301u16, 23, 4588, 0x002F, 771, 0xC02B] {
             assert!(!is_grease(real), "{real:#06x} should not be GREASE");
         }
+    }
+
+    #[test]
+    fn ja3_parser_fills_tls_fields() {
+        let fp = Fingerprint::builder()
+            .ja3("771,4865-4866,0-11-10,29-23,0")
+            .unwrap()
+            .build();
+        assert_eq!(fp.tls_version_min, Some(771));
+        assert_eq!(fp.ciphers, vec![0x1301, 0x1302]);
+        assert_eq!(fp.extension_order, vec![0, 11, 10]);
+        assert_eq!(fp.curves, vec![29, 23]);
+    }
+
+    #[test]
+    fn ja3_parser_strips_trailing_padding_extension() {
+        // extensions ending in `-21` (padding): the SSL engine manages padding.
+        let fp = Fingerprint::builder()
+            .ja3("771,4865,0-11-21,29,0")
+            .unwrap()
+            .build();
+        assert_eq!(fp.extension_order, vec![0, 11]);
+    }
+
+    #[test]
+    fn ja3_parser_rejects_malformed() {
+        let err = Fingerprint::builder().ja3("771,4865,0-11").unwrap_err();
+        assert!(matches!(err, FingerprintError::MalformedJa3 { .. }));
     }
 }
