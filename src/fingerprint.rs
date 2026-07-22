@@ -248,6 +248,24 @@ impl FingerprintBuilder {
         self.fp.h2_pseudo_order = Some(parts[3].replace(',', ""));
         Ok(self)
     }
+
+    /// Parse an HTTP/3 "perk" fingerprint
+    /// `settings|pseudo_order|quic_transport_params`. Ported from curl_cffi
+    /// `set_perk_options`. Sets `enable_http3`.
+    pub fn perk(mut self, perk: &str) -> Result<Self, FingerprintError> {
+        let parts: Vec<&str> = perk.split('|').collect();
+        if parts.len() != 3 {
+            return Err(FingerprintError::MalformedAkamai {
+                input: perk.to_string(),
+                reason: "perk expected 3 pipe-separated fields".to_string(),
+            });
+        }
+        self.fp.enable_http3 = true;
+        self.fp.h3_settings = Some(parts[0].to_string());
+        self.fp.h3_pseudo_order = Some(parts[1].replace(',', ""));
+        self.fp.quic_transport_params = Some(parts[2].to_string());
+        Ok(self)
+    }
 }
 
 // Ported verbatim from curl_cffi/requests/impersonate.py::TLS_CIPHER_NAME_MAP
@@ -479,5 +497,17 @@ mod tests {
             .akamai("1:65536|15663105")
             .unwrap_err();
         assert!(matches!(err, FingerprintError::MalformedAkamai { .. }));
+    }
+
+    #[test]
+    fn perk_parser_fills_http3_fields() {
+        let fp = Fingerprint::builder()
+            .perk("1:2|m,a,s,p|3:4")
+            .unwrap()
+            .build();
+        assert!(fp.enable_http3);
+        assert_eq!(fp.h3_settings.as_deref(), Some("1:2"));
+        assert_eq!(fp.h3_pseudo_order.as_deref(), Some("masp"));
+        assert_eq!(fp.quic_transport_params.as_deref(), Some("3:4"));
     }
 }
