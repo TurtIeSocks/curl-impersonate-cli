@@ -25,6 +25,9 @@ download = ["dep:reqwest", "dep:flate2", "dep:tar", "dep:dirs", "tokio/fs"]
 # API as tools for LLM agents. Pulls in the rmcp SDK; enables `download` so the
 # server can fetch a wrapper on first use. Off the default (library) build.
 mcp = ["download", "dep:rmcp", "dep:serde", "tokio/rt-multi-thread", "tokio/macros"]
+# Opt-in JSON capture parsing: `Fingerprint::from_capture_json`. Pulls serde +
+# serde_json; off the default build.
+json = ["dep:serde", "dep:serde_json"]
 
 [dependencies]
 tokio     = { version = "1", features = ["process", "io-util", "rt"] }
@@ -41,6 +44,9 @@ dirs    = { version = "6", optional = true }
 rmcp  = { version = "2", features = ["server", "macros", "transport-io"], optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 
+# `json` feature only.
+serde_json = { version = "1", optional = true }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
@@ -48,6 +54,11 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 [[example]]
 name = "download_and_get"
 required-features = ["download"]
+
+# Only builds with the `json` feature (uses `Fingerprint::from_capture_json`).
+[[example]]
+name = "custom_fingerprint"
+required-features = ["json"]
 
 # The MCP server binary. Only builds with the `mcp` feature, keeping rmcp and its
 # transitive deps out of the default library build.
@@ -57,7 +68,7 @@ path = "src/bin/mcp.rs"
 required-features = ["mcp"]
 
 [package.metadata.docs.rs]
-# Build docs with the download feature so its module is documented. Not
-# `all-features`: the `mcp` feature only adds a binary (rmcp SDK), nothing the
-# library docs need, so keep it out of the docs build.
-features = ["download"]
+# Build docs with the download + json features so their APIs are documented.
+# Not `all-features`: the `mcp` feature only adds a binary (rmcp SDK), nothing
+# the library docs need, so keep it out of the docs build.
+features = ["download", "json"]

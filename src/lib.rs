@@ -20,6 +20,13 @@
 //! wrapper scripts / binary). Install it yourself, or enable the `download`
 //! feature to fetch a prebuilt release into a cache dir at runtime. See
 //! <https://github.com/lexiforest/curl-impersonate>.
+//!
+//! ## Custom fingerprints
+//!
+//! Beyond the preset wrappers, [`Fingerprint`] drives the raw `curl-impersonate`
+//! binary with an arbitrary captured profile (`--impersonate <base>` baseline +
+//! granular overlay). See [`Request::fingerprint`] and, with the `json` feature,
+//! [`Fingerprint::from_capture_json`].
 
 use std::ffi::OsString;
 use std::process::Stdio;
@@ -30,6 +37,9 @@ use tokio::{io::AsyncWriteExt, process::Command};
 /// `download` feature. See [`download::ensure_binary`].
 #[cfg(feature = "download")]
 pub mod download;
+
+pub mod fingerprint;
+pub use fingerprint::{AlpsMode, CertComp, Fingerprint, FingerprintError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
@@ -68,6 +78,8 @@ pub enum CurlError {
     NoStatus,
     #[error("unparsable status line: {0:?}")]
     BadStatus(String),
+    #[error("fingerprint: {0}")]
+    Fingerprint(#[from] crate::fingerprint::FingerprintError),
 }
 
 /// Parsed HTTP response: status code, raw `Set-Cookie` header lines, the final
@@ -108,6 +120,7 @@ pub struct Request {
     max_filesize: Option<u64>,
     follow_redirects: bool,
     max_redirs: u32,
+    fingerprint: Option<Fingerprint>,
 }
 
 /// Default response-size cap (`--max-filesize`): a hostile target/proxy can't
@@ -144,6 +157,7 @@ impl Request {
             max_filesize: Some(DEFAULT_MAX_FILESIZE),
             follow_redirects: false,
             max_redirs: DEFAULT_MAX_REDIRS,
+            fingerprint: None,
         }
     }
 
@@ -232,6 +246,15 @@ impl Request {
         self
     }
 
+    /// Attach a custom [`Fingerprint`]. `bin` must be the raw `curl-impersonate`
+    /// binary (not a `curl_chromeNNN` wrapper); its `to_args()` are spliced into
+    /// the argv. Combining this with a wrapper binary double-applies the
+    /// impersonation and is unsupported.
+    pub fn fingerprint(mut self, fp: Fingerprint) -> Self {
+        self.fingerprint = Some(fp);
+        self
+    }
+
     pub async fn send(self) -> Result<Response, CurlError> {
         run(self).await
     }
@@ -241,7 +264,11 @@ impl Request {
 /// `-- <url>`). Pure over the request so it is unit-testable without spawning:
 /// proxy credentials (env `ALL_PROXY`) and the request body (stdin) are handled
 /// separately in [`run`] and deliberately never appear here.
-fn build_argv(req: &Request) -> Vec<String> {
+///
+/// `fp_args` are the caller's already-resolved [`Fingerprint::to_args`] flags
+/// (empty when the request carries no custom fingerprint); they land right
+/// after the base flags and well before the closing `--`/URL.
+fn build_argv(req: &Request, fp_args: &[String]) -> Vec<String> {
     let mut a: Vec<String> = vec![
         "-sS".into(), // silent, but surface transport errors on stderr
         "-i".into(),  // include response headers in stdout for cookie/status parsing
@@ -253,6 +280,7 @@ fn build_argv(req: &Request) -> Vec<String> {
         "-w".into(),
         format!("%{{stderr}}{FINAL_URL_SENTINEL}%{{url_effective}}\\n"),
     ];
+    a.extend(fp_args.iter().cloned());
     if req.follow_redirects {
         a.push("-L".into());
         a.push("--max-redirs".into());
@@ -311,8 +339,12 @@ fn build_argv(req: &Request) -> Vec<String> {
 }
 
 async fn run(req: Request) -> Result<Response, CurlError> {
+    let fp_args = match &req.fingerprint {
+        Some(fp) => fp.to_args()?,
+        None => Vec::new(),
+    };
     let mut cmd = Command::new(&req.bin);
-    cmd.args(build_argv(&req));
+    cmd.args(build_argv(&req, &fp_args));
 
     match &req.proxy {
         Some(p) => {
@@ -550,7 +582,10 @@ mod tests {
     #[test]
     fn follow_redirects_adds_dash_l_and_max_redirs() {
         // Off by default → no -L.
-        let argv = build_argv(&Request::get("curl_chrome146", "https://example.com/auth"));
+        let argv = build_argv(
+            &Request::get("curl_chrome146", "https://example.com/auth"),
+            &[],
+        );
         assert!(
             !argv.iter().any(|a| a == "-L"),
             "no -L unless opted in: {argv:?}"
@@ -559,6 +594,7 @@ mod tests {
         // Opt in → -L --max-redirs 10, and the URL still trails after `--`.
         let argv = build_argv(
             &Request::get("curl_chrome146", "https://example.com/auth").follow_redirects(true),
+            &[],
         );
         let l = argv.iter().position(|a| a == "-L").expect("expected -L");
         assert_eq!(argv[l + 1], "--max-redirs");
@@ -571,6 +607,7 @@ mod tests {
             &Request::get("curl_chrome146", "https://example.com")
                 .follow_redirects(true)
                 .max_redirs(3),
+            &[],
         );
         let l = argv.iter().position(|a| a == "-L").unwrap();
         assert_eq!(argv[l + 2], "3");
@@ -583,6 +620,7 @@ mod tests {
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .body(b"a=1".to_vec())
                 .follow_redirects(true),
+            &[],
         );
         // `--data-binary @-` implies POST for the first request; NO `-X POST`, so
         // curl downgrades a 30x follow-up to GET (matches wreq/browser) instead of
@@ -600,9 +638,45 @@ mod tests {
 
     #[test]
     fn bodyless_post_forces_dash_x_post() {
-        let argv = build_argv(&Request::post("curl_chrome146", "https://example.com/ping"));
+        let argv = build_argv(
+            &Request::post("curl_chrome146", "https://example.com/ping"),
+            &[],
+        );
         // No body to imply the method, so POST is forced explicitly.
         assert!(argv.windows(2).any(|w| w[0] == "-X" && w[1] == "POST"));
         assert!(!argv.iter().any(|a| a == "--data-binary"));
+    }
+
+    #[test]
+    fn fingerprint_flags_spliced_before_url() {
+        let fp = crate::Fingerprint::builder()
+            .base_target("chrome146")
+            .ja3("771,4865-4866,0-11-10,29-23,0")
+            .unwrap()
+            .build();
+        let req = Request::get("curl-impersonate", "https://example.com/").fingerprint(fp);
+        let fp_args = req.fingerprint.as_ref().unwrap().to_args().unwrap();
+        let argv = build_argv(&req, &fp_args);
+
+        let imp = argv
+            .iter()
+            .position(|a| a == "--impersonate")
+            .expect("--impersonate present");
+        let url = argv
+            .iter()
+            .position(|a| a == "https://example.com/")
+            .unwrap();
+        let dashdash = argv.iter().position(|a| a == "--").unwrap();
+        assert!(imp < dashdash, "fingerprint flags come before `--`");
+        assert!(dashdash < url);
+        assert!(argv.iter().any(|a| a == "--ciphers"));
+    }
+
+    #[test]
+    fn no_fingerprint_argv_unchanged() {
+        let req = Request::get("curl_chrome146", "https://example.com/");
+        let argv = build_argv(&req, &[]);
+        assert!(!argv.iter().any(|a| a == "--impersonate"));
+        assert_eq!(argv.last().unwrap(), "https://example.com/");
     }
 }

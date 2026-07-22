@@ -257,7 +257,44 @@ pub async fn ensure_binary(
     opts: &DownloadOptions,
 ) -> Result<PathBuf, DownloadError> {
     validate_browser(browser)?;
+    let extract_dir = ensure_extracted(opts).await?;
+    let wrapper = extract_dir.join(wrapper_file_name(browser));
+    if wrapper.is_file() {
+        Ok(finalize(wrapper))
+    } else {
+        Err(DownloadError::WrapperNotFound {
+            browser: browser.to_string(),
+            dir: extract_dir,
+        })
+    }
+}
 
+/// File name of the raw base binary inside the extracted CLI release.
+fn base_binary_file_name() -> &'static str {
+    "curl-impersonate"
+}
+
+/// Ensure the raw `curl-impersonate` binary exists locally; download + extract
+/// the release for the current platform if missing. Returns the canonicalized
+/// path to pass as `bin` to a request that carries a custom
+/// [`crate::Fingerprint`]. Idempotent, like [`ensure_binary`].
+pub async fn ensure_impersonate_binary(opts: &DownloadOptions) -> Result<PathBuf, DownloadError> {
+    let extract_dir = ensure_extracted(opts).await?;
+    let base = extract_dir.join(base_binary_file_name());
+    if base.is_file() {
+        Ok(finalize(base))
+    } else {
+        Err(DownloadError::WrapperNotFound {
+            browser: "impersonate (base binary)".to_string(),
+            dir: extract_dir,
+        })
+    }
+}
+
+/// Ensure the release for the current platform is extracted; return its
+/// extract dir. Shared by [`ensure_binary`] (wrappers) and
+/// [`ensure_impersonate_binary`] (base binary).
+async fn ensure_extracted(opts: &DownloadOptions) -> Result<PathBuf, DownloadError> {
     let version = opts.version.as_deref().unwrap_or(DEFAULT_VERSION);
     validate_version(version)?;
     let os = std::env::consts::OS;
@@ -271,21 +308,12 @@ pub async fn ensure_binary(
             .ok_or(DownloadError::NoCacheDir)?
             .join(CACHE_SUBDIR),
     };
-
     let release_dir = cache_root.join(version);
     let extract_dir = release_dir.join(&triple);
-    let wrapper = extract_dir.join(wrapper_file_name(browser));
 
     // Fast path: the release is already extracted.
     if extract_dir.is_dir() {
-        return if wrapper.is_file() {
-            Ok(finalize(wrapper))
-        } else {
-            Err(DownloadError::WrapperNotFound {
-                browser: browser.to_string(),
-                dir: extract_dir,
-            })
-        };
+        return Ok(extract_dir);
     }
 
     // Download into the cache root (create it first so temp files share the
@@ -300,8 +328,7 @@ pub async fn ensure_binary(
 
     let asset = asset_name(version, &triple);
     let url = download_url(version, &asset);
-    let dl = download_to_file(&url, &tarball).await;
-    if let Err(e) = dl {
+    if let Err(e) = download_to_file(&url, &tarball).await {
         let _ = fs::remove_file(&tarball).await;
         return Err(e);
     }
@@ -316,14 +343,7 @@ pub async fn ensure_binary(
     let _ = fs::remove_file(&tarball).await;
     placed??;
 
-    if wrapper.is_file() {
-        Ok(finalize(wrapper))
-    } else {
-        Err(DownloadError::WrapperNotFound {
-            browser: browser.to_string(),
-            dir: extract_dir,
-        })
-    }
+    Ok(extract_dir)
 }
 
 /// Reject browser ids that are empty or contain anything other than ASCII
@@ -754,6 +774,11 @@ mod tests {
         assert_eq!(Libc::Musl.as_str(), "musl");
     }
 
+    #[test]
+    fn base_binary_file_name_is_curl_impersonate() {
+        assert_eq!(base_binary_file_name(), "curl-impersonate");
+    }
+
     // --- network integration test (opt-in) ---
 
     /// Actually downloads + extracts the release for the *current* platform into a
@@ -778,6 +803,25 @@ mod tests {
         let again = ensure_binary("chrome146", &opts).await.expect("cached");
         assert_eq!(again, path);
 
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    /// Network integration: downloads the release and returns the base binary.
+    /// Ignored by default. Run with:
+    /// `cargo test --features download -- --ignored ensures_impersonate_binary`.
+    #[tokio::test]
+    #[ignore = "network: downloads a real curl-impersonate release"]
+    async fn ensures_impersonate_binary() {
+        let cache = std::env::temp_dir().join(format!("cimp-base-{}", unique_suffix()));
+        let opts = DownloadOptions {
+            cache_dir: Some(cache.clone()),
+            ..Default::default()
+        };
+        let path = ensure_impersonate_binary(&opts)
+            .await
+            .expect("download base binary");
+        assert!(path.is_file());
+        assert_eq!(path.file_name().unwrap(), "curl-impersonate");
         let _ = std::fs::remove_dir_all(&cache);
     }
 }
