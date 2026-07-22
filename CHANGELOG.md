@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The raw `curl-impersonate` binary path (custom [`Fingerprint`]) now passes
+  `--compressed`, so `gzip`/`br`/`zstd` responses are decoded. The `--impersonate`
+  baseline advertises `Accept-Encoding` (a real browser does), so the server
+  compresses; without `--compressed` the returned body was raw compressed bytes.
+  The `curl_chromeNNN` wrapper scripts already pass it — the raw binary had no
+  wrapper to, so `build_argv` now adds it unconditionally (a duplicate is
+  idempotent to curl).
+
 ## [0.2.0] - 2026-07-16
 
 ### Added

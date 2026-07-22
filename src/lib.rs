@@ -272,6 +272,14 @@ fn build_argv(req: &Request, fp_args: &[String]) -> Vec<String> {
     let mut a: Vec<String> = vec![
         "-sS".into(), // silent, but surface transport errors on stderr
         "-i".into(),  // include response headers in stdout for cookie/status parsing
+        // Decode gzip/br/zstd. The `--impersonate` baseline advertises
+        // `Accept-Encoding: gzip, ...` (a real browser does), so the server
+        // compresses; without this curl hands back the raw compressed bytes and
+        // the body this crate returns would be undecoded. The `curl_chromeNNN`
+        // wrapper scripts pass `--compressed` themselves — a duplicate here is
+        // idempotent to curl — but the RAW `curl-impersonate` binary (the custom
+        // `Fingerprint` path) has no wrapper, so it must be added here.
+        "--compressed".into(),
         "--max-time".into(),
         format!("{}", req.timeout_secs),
         // Emit the final effective URL (after -L) to STDERR via write-out, so it
@@ -678,5 +686,25 @@ mod tests {
         let argv = build_argv(&req, &[]);
         assert!(!argv.iter().any(|a| a == "--impersonate"));
         assert_eq!(argv.last().unwrap(), "https://example.com/");
+    }
+
+    #[test]
+    fn argv_always_decodes_compression() {
+        // Both paths must carry `--compressed` — the baseline advertises
+        // `Accept-Encoding`, so without it the returned body is raw gzip/br.
+        // Wrapper path (no fingerprint):
+        let plain = build_argv(&Request::get("curl_chrome146", "https://example.com/"), &[]);
+        assert!(
+            plain.iter().any(|a| a == "--compressed"),
+            "wrapper argv: {plain:?}"
+        );
+        // Raw fingerprint path:
+        let fp = crate::Fingerprint::builder()
+            .base_target("chrome146")
+            .build();
+        let req = Request::get("curl-impersonate", "https://example.com/").fingerprint(fp);
+        let fp_args = req.fingerprint.as_ref().unwrap().to_args().unwrap();
+        let raw = build_argv(&req, &fp_args);
+        assert!(raw.iter().any(|a| a == "--compressed"), "raw argv: {raw:?}");
     }
 }
