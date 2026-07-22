@@ -167,6 +167,46 @@ let resp = Request::get("curl_chrome146", "https://example.com/")
 
 Credentials are handed to curl through the **`ALL_PROXY` environment variable, not argv** — so they never land in world-readable `/proc/<pid>/cmdline`; the process environment is owner-only. The caller is responsible for **percent-encoding** the userinfo (`user`/`pass`) in the URL.
 
+## Custom fingerprint profiles
+
+Beyond the pre-built `curl_chromeNNN` wrappers, you can impersonate an
+**arbitrary captured profile** — including browser versions with no pre-built
+wrapper. Supply a `Fingerprint` (JA3 + Akamai H2 + user-agent, or the richer raw
+ClientHello arrays) and the crate synthesizes the curl-impersonate flags.
+
+```rust,ignore
+use curl_impersonate_cli::{Fingerprint, Request};
+
+// With the `json` feature, from a captured profile:
+let fp = Fingerprint::from_capture_json(capture_json)?;
+
+// Or build it directly:
+let fp = Fingerprint::builder()
+    .base_target("chrome146")
+    .ja3("771,4865-4866-…,…,4588-29-23-24,0")?
+    .akamai("1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p")?
+    .user_agent("Mozilla/5.0 … Chrome/149.0.0.0 Mobile Safari/537.36")
+    .build();
+
+// `bin` is the RAW `curl-impersonate` binary, NOT a `curl_chromeNNN` wrapper.
+let resp = Request::get("curl-impersonate", "https://example.com/")
+    .fingerprint(fp)
+    .send()
+    .await?;
+```
+
+**How it works — baseline + overlay.** curl-impersonate's `--tls-extension-order`
+can only *reorder* extensions the ClientHello already emits; it can't add ALPS,
+ECH, or cert-compression. So a custom profile runs as `--impersonate <base>`
+(the full browser baseline, from the capture's `tlsProfile`) plus a granular
+overlay (`--ciphers`, `--curves`, `--signature-hashes`, `--http2-settings`, …)
+that shifts it to match your exact capture.
+
+**Fidelity, honestly.** Byte-exact *per-connection* JA3 is impossible — real
+Chrome permutes extensions and GREASEs every connection, so its own raw JA3
+varies per connection. The target is **JA4 / Akamai-H2 / peetprint parity plus
+the randomization** (`--tls-grease`, `--tls-permute-extensions`).
+
 ## Feature flags
 
 | Feature    | Default | Description                                                                                                 |

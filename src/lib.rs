@@ -20,6 +20,13 @@
 //! wrapper scripts / binary). Install it yourself, or enable the `download`
 //! feature to fetch a prebuilt release into a cache dir at runtime. See
 //! <https://github.com/lexiforest/curl-impersonate>.
+//!
+//! ## Custom fingerprints
+//!
+//! Beyond the preset wrappers, [`Fingerprint`] drives the raw `curl-impersonate`
+//! binary with an arbitrary captured profile (`--impersonate <base>` baseline +
+//! granular overlay). See [`Request::fingerprint`] and, with the `json` feature,
+//! [`Fingerprint::from_capture_json`].
 
 use std::ffi::OsString;
 use std::process::Stdio;

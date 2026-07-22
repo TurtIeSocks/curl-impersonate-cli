@@ -55,6 +55,11 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 name = "download_and_get"
 required-features = ["download"]
 
+# Only builds with the `json` feature (uses `Fingerprint::from_capture_json`).
+[[example]]
+name = "custom_fingerprint"
+required-features = ["json"]
+
 # The MCP server binary. Only builds with the `mcp` feature, keeping rmcp and its
 # transitive deps out of the default library build.
 [[bin]]
