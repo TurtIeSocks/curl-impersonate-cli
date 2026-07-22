@@ -270,6 +270,78 @@ impl Fingerprint {
             a.push("--no-alpn".into());
         }
 
+        // 8. HTTP/2 overlay.
+        if !self.h2_settings.is_empty() {
+            a.push("--http2-settings".into());
+            a.push(
+                self.h2_settings
+                    .iter()
+                    .map(|(k, v)| format!("{k}:{v}"))
+                    .collect::<Vec<_>>()
+                    .join(";"),
+            );
+        }
+        if let Some(w) = self.h2_window_update {
+            a.push("--http2-window-update".into());
+            a.push(w.to_string());
+        }
+        if let Some(s) = &self.h2_streams {
+            if s != "0" {
+                a.push("--http2-streams".into());
+                a.push(s.clone());
+            }
+        }
+        if let Some(p) = &self.h2_pseudo_order {
+            a.push("--http2-pseudo-headers-order".into());
+            a.push(p.clone());
+        }
+        if let Some(e) = self.h2_stream_exclusive {
+            a.push("--http2-stream-exclusive".into());
+            a.push(e.to_string());
+        }
+        if self.h2_no_priority {
+            a.push("--http2-no-priority".into());
+        }
+        match self.split_cookies {
+            Some(true) => a.push("--split-cookies".into()),
+            Some(false) => a.push("--no-split-cookies".into()),
+            None => {}
+        }
+
+        // 9. HTTP/3 overlay.
+        if self.enable_http3 {
+            a.push("--http3".into());
+        }
+        if let Some(s) = &self.h3_settings {
+            a.push("--http3-settings".into());
+            a.push(s.clone());
+        }
+        if let Some(p) = &self.h3_pseudo_order {
+            a.push("--http3-pseudo-headers-order".into());
+            a.push(p.clone());
+        }
+        if let Some(s) = &self.h3_sig_hash_algs {
+            a.push("--http3-sig-hash-algs".into());
+            a.push(s.clone());
+        }
+        if let Some(o) = &self.h3_tls_extension_order {
+            a.push("--http3-tls-extension-order".into());
+            a.push(o.clone());
+        }
+        if let Some(q) = &self.quic_transport_params {
+            a.push("--quic-transport-params".into());
+            a.push(q.clone());
+        }
+
+        // 10. Headers / proxy.
+        if !self.header_order.is_empty() {
+            a.push("--http-header-order".into());
+            a.push(self.header_order.join(","));
+        }
+        if self.proxy_credential_no_reuse {
+            a.push("--proxy-credential-no-reuse".into());
+        }
+
         Ok(a)
     }
 }
@@ -723,5 +795,64 @@ mod tests {
         assert!(args.iter().any(|a| a == "--tls-signed-cert-timestamps"));
         assert_eq!(arg_after(&args, "--tls-record-size-limit"), Some("16385"));
         assert_eq!(arg_after(&args, "--tls-key-shares-limit"), Some("3"));
+    }
+
+    #[test]
+    fn to_args_emits_http2_flags() {
+        let fp = Fingerprint::builder()
+            .akamai("1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p")
+            .unwrap()
+            .build();
+        let args = fp.to_args().unwrap();
+        assert_eq!(
+            arg_after(&args, "--http2-settings"),
+            Some("1:65536;2:0;4:6291456;6:262144")
+        );
+        assert_eq!(arg_after(&args, "--http2-window-update"), Some("15663105"));
+        assert_eq!(
+            arg_after(&args, "--http2-pseudo-headers-order"),
+            Some("masp")
+        );
+        // streams == "0" is omitted.
+        assert!(!args.iter().any(|a| a == "--http2-streams"));
+    }
+
+    #[test]
+    fn to_args_nonzero_streams_and_exclusive() {
+        let mut fp = Fingerprint::builder()
+            .akamai("1:65536|15663105|1:0:0:201|m,a,s,p")
+            .unwrap()
+            .build();
+        fp.h2_stream_exclusive = Some(1);
+        fp.h2_no_priority = true;
+        fp.split_cookies = Some(true);
+        let args = fp.to_args().unwrap();
+        assert_eq!(arg_after(&args, "--http2-streams"), Some("1:0:0:201"));
+        assert_eq!(arg_after(&args, "--http2-stream-exclusive"), Some("1"));
+        assert!(args.iter().any(|a| a == "--http2-no-priority"));
+        assert!(args.iter().any(|a| a == "--split-cookies"));
+    }
+
+    #[test]
+    fn to_args_emits_http3_and_headers() {
+        let mut fp = Fingerprint::builder()
+            .perk("1:2|m,a,s,p|3:4")
+            .unwrap()
+            .build();
+        fp.header_order = vec!["host".into(), "user-agent".into()];
+        fp.proxy_credential_no_reuse = true;
+        let args = fp.to_args().unwrap();
+        assert!(args.iter().any(|a| a == "--http3"));
+        assert_eq!(arg_after(&args, "--http3-settings"), Some("1:2"));
+        assert_eq!(
+            arg_after(&args, "--http3-pseudo-headers-order"),
+            Some("masp")
+        );
+        assert_eq!(arg_after(&args, "--quic-transport-params"), Some("3:4"));
+        assert_eq!(
+            arg_after(&args, "--http-header-order"),
+            Some("host,user-agent")
+        );
+        assert!(args.iter().any(|a| a == "--proxy-credential-no-reuse"));
     }
 }
