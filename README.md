@@ -170,7 +170,7 @@ Credentials are handed to curl through the **`ALL_PROXY` environment variable, n
 ## Custom fingerprint profiles
 
 Beyond the pre-built `curl_chromeNNN` wrappers, you can impersonate an
-**arbitrary captured profile** — including browser versions with no pre-built
+**arbitrary captured profile**, including browser versions with no pre-built
 wrapper. Supply a `Fingerprint` (JA3 + Akamai H2 + user-agent, or the richer raw
 ClientHello arrays) and the crate synthesizes the curl-impersonate flags.
 
@@ -195,17 +195,17 @@ let resp = Request::get("curl-impersonate", "https://example.com/")
     .await?;
 ```
 
-**How it works — baseline + overlay.** curl-impersonate's `--tls-extension-order`
-can only *reorder* extensions the ClientHello already emits; it can't add ALPS,
+**How it works: baseline + overlay.** curl-impersonate's `--tls-extension-order`
+only *reorders* extensions the ClientHello already emits; it can't add ALPS,
 ECH, or cert-compression. So a custom profile runs as `--impersonate <base>`
 (the full browser baseline, from the capture's `tlsProfile`) plus a granular
 overlay (`--ciphers`, `--curves`, `--signature-hashes`, `--http2-settings`, …)
-that shifts it to match your exact capture.
+that shifts it to match your capture.
 
-**Fidelity, honestly.** Byte-exact *per-connection* JA3 is impossible — real
+**Fidelity, honestly.** Byte-exact *per-connection* JA3 is impossible. Real
 Chrome permutes extensions and GREASEs every connection, so its own raw JA3
-varies per connection. The target is **JA4 / Akamai-H2 / peetprint parity plus
-the randomization** (`--tls-grease`, `--tls-permute-extensions`).
+varies per connection too. The realistic target is JA4 / Akamai-H2 / peetprint
+parity plus that same randomization (`--tls-grease`, `--tls-permute-extensions`).
 
 ## Feature flags
 
