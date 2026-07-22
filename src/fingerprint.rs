@@ -15,9 +15,6 @@ pub enum CertComp {
 }
 
 impl CertComp {
-    // Used by `Fingerprint::to_args` (added in a later, out-of-scope task); not
-    // yet called by Task 1/2, so silence the dead-code lint until it lands.
-    #[allow(dead_code)]
     fn as_str(self) -> &'static str {
         match self {
             CertComp::Zlib => "zlib",
@@ -145,6 +142,136 @@ impl Fingerprint {
             fp: Fingerprint::default(),
         }
     }
+
+    /// Synthesize the curl-impersonate CLI flags that reproduce this fingerprint,
+    /// applied as an overlay on the `--impersonate <base>` baseline. Returns the
+    /// argv fragment spliced before the URL by `build_argv`. Strict: an unmapped
+    /// cipher/curve/sig-alg id is a hard error.
+    pub fn to_args(&self) -> Result<Vec<String>, FingerprintError> {
+        let mut a: Vec<String> = Vec::new();
+
+        // 1. Baseline.
+        if let Some(base) = &self.base_target {
+            a.push("--impersonate".into());
+            a.push(if self.default_headers {
+                base.clone()
+            } else {
+                format!("{base}:no")
+            });
+        }
+
+        // UA override (replaces the baseline's User-Agent header).
+        if let Some(ua) = &self.user_agent {
+            a.push("-H".into());
+            a.push(format!("User-Agent: {ua}"));
+        }
+
+        // 2. TLS min version (no --tls-max: negotiate up, matching MAX_DEFAULT).
+        match self.tls_version_min {
+            Some(772) => a.push("--tlsv1.3".into()),
+            Some(_) => a.push("--tlsv1.2".into()),
+            None => {}
+        }
+
+        // 3. Ciphers (all suites, ':'-joined names).
+        if !self.ciphers.is_empty() {
+            let names = self
+                .ciphers
+                .iter()
+                .map(|&id| cipher_name(id).ok_or(FingerprintError::UnknownCipher(id)))
+                .collect::<Result<Vec<_>, _>>()?;
+            a.push("--ciphers".into());
+            a.push(names.join(":"));
+        }
+
+        // 4. Curves.
+        if !self.curves.is_empty() {
+            let names = self
+                .curves
+                .iter()
+                .map(|&id| curve_name(id).ok_or(FingerprintError::UnknownCurve(id)))
+                .collect::<Result<Vec<_>, _>>()?;
+            a.push("--curves".into());
+            a.push(names.join(":"));
+        }
+
+        // 5. Extension order — only when NOT permuting.
+        if !self.permute_extensions && !self.extension_order.is_empty() {
+            a.push("--tls-extension-order".into());
+            a.push(
+                self.extension_order
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("-"),
+            );
+        }
+
+        // 6. Signature algorithms (','-joined names).
+        if !self.sig_hash_algs.is_empty() {
+            let names = self
+                .sig_hash_algs
+                .iter()
+                .map(|&id| sig_hash_name(id).ok_or(FingerprintError::UnknownSigAlg(id)))
+                .collect::<Result<Vec<_>, _>>()?;
+            a.push("--signature-hashes".into());
+            a.push(names.join(","));
+        }
+
+        // 7. extra_fp TLS toggles.
+        if self.grease {
+            a.push("--tls-grease".into());
+        }
+        if self.permute_extensions {
+            a.push("--tls-permute-extensions".into());
+        }
+        if !self.cert_compression.is_empty() {
+            a.push("--cert-compression".into());
+            a.push(
+                self.cert_compression
+                    .iter()
+                    .map(|c| c.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+        }
+        if let Some(v) = self.record_size_limit {
+            a.push("--tls-record-size-limit".into());
+            a.push(v.to_string());
+        }
+        if let Some(dc) = &self.delegated_credentials {
+            a.push("--tls-delegated-credentials".into());
+            a.push(dc.clone());
+        }
+        if let Some(n) = self.key_shares_limit {
+            a.push("--tls-key-shares-limit".into());
+            a.push(n.to_string());
+        }
+        match self.alps {
+            Some(AlpsMode::Legacy) => a.push("--alps".into()),
+            Some(AlpsMode::NewCodepoint) => {
+                a.push("--alps".into());
+                a.push("--tls-use-new-alps-codepoint".into());
+            }
+            None => {}
+        }
+        match self.session_ticket {
+            Some(true) => a.push("--tls-session-ticket".into()),
+            Some(false) => a.push("--no-tls-session-ticket".into()),
+            None => {}
+        }
+        if self.signed_cert_timestamps {
+            a.push("--tls-signed-cert-timestamps".into());
+        }
+        if self.no_npn {
+            a.push("--no-npn".into());
+        }
+        if self.no_alpn {
+            a.push("--no-alpn".into());
+        }
+
+        Ok(a)
+    }
 }
 
 /// Builder for [`Fingerprint`]. Setters that parse fingerprint strings
@@ -271,10 +398,6 @@ impl FingerprintBuilder {
 // Ported verbatim from curl_cffi/requests/impersonate.py::TLS_CIPHER_NAME_MAP
 // (IANA cipher id -> BoringSSL cipher name). All suites go in one `--ciphers`
 // list; BoringSSL accepts TLS 1.3 suite names there too.
-//
-// Only exercised by tests until `Fingerprint::to_args` (a later, out-of-scope
-// task) calls it; `#[allow(dead_code)]` silences the lint until it lands.
-#[allow(dead_code)]
 fn cipher_name(id: u16) -> Option<&'static str> {
     Some(match id {
         0x000A => "TLS_RSA_WITH_3DES_EDE_CBC_SHA",
@@ -319,8 +442,6 @@ fn cipher_name(id: u16) -> Option<&'static str> {
 }
 
 // Ported from curl_cffi TLS_EC_CURVES_MAP (supported-group id -> name).
-// Only exercised by tests until `to_args` (later task) calls it.
-#[allow(dead_code)]
 fn curve_name(id: u16) -> Option<&'static str> {
     Some(match id {
         19 => "P-192",
@@ -340,8 +461,6 @@ fn curve_name(id: u16) -> Option<&'static str> {
 // RFC 8446 §4.2.3 SignatureScheme id -> name accepted by
 // `--signature-hashes`. curl_cffi has no such map (it takes names from the
 // caller); built here for the raw-array path.
-// Only exercised by tests until `to_args` (later task) calls it.
-#[allow(dead_code)]
 fn sig_hash_name(id: u16) -> Option<&'static str> {
     Some(match id {
         0x0201 => "rsa_pkcs1_sha1",
@@ -509,5 +628,100 @@ mod tests {
         assert_eq!(fp.h3_settings.as_deref(), Some("1:2"));
         assert_eq!(fp.h3_pseudo_order.as_deref(), Some("masp"));
         assert_eq!(fp.quic_transport_params.as_deref(), Some("3:4"));
+    }
+
+    // Helper: find the value following a flag in an argv vec.
+    fn arg_after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .map(|s| s.as_str())
+    }
+
+    #[test]
+    fn to_args_emits_baseline_and_tls() {
+        let fp = Fingerprint::builder()
+            .base_target("chrome146")
+            .ja3("771,4865-4866-49195,0-11-10,29-23,0")
+            .unwrap()
+            .build();
+        let args = fp.to_args().unwrap();
+        assert_eq!(arg_after(&args, "--impersonate"), Some("chrome146"));
+        assert_eq!(
+            arg_after(&args, "--ciphers"),
+            Some(
+                "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+            )
+        );
+        assert_eq!(arg_after(&args, "--curves"), Some("X25519:P-256"));
+        assert_eq!(arg_after(&args, "--tls-extension-order"), Some("0-11-10"));
+        assert!(args.iter().any(|a| a == "--tlsv1.2"));
+    }
+
+    #[test]
+    fn to_args_baseline_no_default_headers() {
+        let fp = Fingerprint::builder()
+            .base_target("chrome146")
+            .default_headers(false)
+            .build();
+        let args = fp.to_args().unwrap();
+        assert_eq!(arg_after(&args, "--impersonate"), Some("chrome146:no"));
+    }
+
+    #[test]
+    fn to_args_permute_skips_extension_order() {
+        let mut fp = Fingerprint::builder()
+            .ja3("771,4865,0-11-10,29,0")
+            .unwrap()
+            .build();
+        fp.permute_extensions = true;
+        let args = fp.to_args().unwrap();
+        assert!(!args.iter().any(|a| a == "--tls-extension-order"));
+        assert!(args.iter().any(|a| a == "--tls-permute-extensions"));
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn to_args_signature_hashes_comma_joined() {
+        let mut fp = Fingerprint::default();
+        fp.sig_hash_algs = vec![0x0804, 0x0403];
+        let args = fp.to_args().unwrap();
+        assert_eq!(
+            arg_after(&args, "--signature-hashes"),
+            Some("rsa_pss_rsae_sha256,ecdsa_secp256r1_sha256")
+        );
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn to_args_unknown_cipher_errors() {
+        let mut fp = Fingerprint::default();
+        fp.ciphers = vec![0xDEAD];
+        assert_eq!(
+            fp.to_args().unwrap_err(),
+            FingerprintError::UnknownCipher(0xDEAD)
+        );
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn to_args_emits_extra_fp_tls_toggles() {
+        let mut fp = Fingerprint::default();
+        fp.grease = true;
+        fp.cert_compression = vec![CertComp::Brotli];
+        fp.alps = Some(AlpsMode::NewCodepoint);
+        fp.session_ticket = Some(false);
+        fp.signed_cert_timestamps = true;
+        fp.record_size_limit = Some(16385);
+        fp.key_shares_limit = Some(3);
+        let args = fp.to_args().unwrap();
+        assert!(args.iter().any(|a| a == "--tls-grease"));
+        assert_eq!(arg_after(&args, "--cert-compression"), Some("brotli"));
+        assert!(args.iter().any(|a| a == "--alps"));
+        assert!(args.iter().any(|a| a == "--tls-use-new-alps-codepoint"));
+        assert!(args.iter().any(|a| a == "--no-tls-session-ticket"));
+        assert!(args.iter().any(|a| a == "--tls-signed-cert-timestamps"));
+        assert_eq!(arg_after(&args, "--tls-record-size-limit"), Some("16385"));
+        assert_eq!(arg_after(&args, "--tls-key-shares-limit"), Some("3"));
     }
 }
