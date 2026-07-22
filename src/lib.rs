@@ -31,6 +31,9 @@ use tokio::{io::AsyncWriteExt, process::Command};
 #[cfg(feature = "download")]
 pub mod download;
 
+pub mod fingerprint;
+pub use fingerprint::{AlpsMode, CertComp, Fingerprint, FingerprintError};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
     Get,
