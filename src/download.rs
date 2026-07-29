@@ -430,9 +430,30 @@ fn finalize(wrapper: PathBuf) -> PathBuf {
     std::fs::canonicalize(&wrapper).unwrap_or(wrapper)
 }
 
+/// Install the ring rustls crypto provider as the process default, once.
+///
+/// reqwest 0.13 uses `rustls-no-provider` here (see Cargo.toml for why aws-lc-rs is avoided), which
+/// means no provider is registered for us. Omitting this is a **runtime panic** — "no process-level
+/// CryptoProvider available" — not a build error, so it cannot be caught by compiling.
+///
+/// It fires when a `Client` is *constructed*, not when a TLS request is made: reqwest builds its
+/// TLS config with the client. A plain-HTTP download through a fresh client would panic too, so
+/// this belongs at every client construction rather than only on HTTPS paths.
+///
+/// Public so an embedding application can install eagerly at startup instead of on first download.
+/// Idempotent: `install_default` returns `Err` when a provider is already present, which is the
+/// "someone got here first" case and not an error.
+pub fn install_default_crypto_provider() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 /// Stream a URL to `dest`, checking the HTTP status first. Streams in chunks so
 /// the whole archive is never buffered in memory.
 async fn download_to_file(url: &str, dest: &Path) -> Result<(), DownloadError> {
+    install_default_crypto_provider();
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .connect_timeout(Duration::from_secs(30))
@@ -823,5 +844,23 @@ mod tests {
         assert!(path.is_file());
         assert_eq!(path.file_name().unwrap(), "curl-impersonate");
         let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    /// The install guard must tolerate repeated calls; a poisoned `Once` would break every
+    /// subsequent download.
+    #[test]
+    fn crypto_provider_install_is_idempotent() {
+        install_default_crypto_provider();
+        install_default_crypto_provider();
+    }
+
+    /// Building a rustls config panics when no provider is registered, so this is the regression
+    /// guard the compiler cannot give us: it fails loudly if the install ever stops working.
+    #[test]
+    fn tls_config_builds_after_install() {
+        install_default_crypto_provider();
+        let _ = rustls::ClientConfig::builder()
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth();
     }
 }

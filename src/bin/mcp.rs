@@ -405,6 +405,11 @@ fn to_mcp_err(err: CurlError) -> McpError {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // reqwest 0.13 registers no rustls crypto provider of its own, and the omission is a runtime
+    // panic on client construction rather than a build error. `mcp` implies `download`, so this
+    // server can reach the downloader; install up front so it never panics mid-request.
+    curl_impersonate_cli::download::install_default_crypto_provider();
+
     let service = CurlImpersonateServer.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
