@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `reqwest` moved to 0.13 and `rmcp` pinned to `=2.2.0`, aligning the shared
+  dependencies with `zendriver-rs` and `proxybroker-rs` so a project using more
+  than one of them compiles a single copy of each rather than two.
+
+  Same crypto as before, stated explicitly instead of inferred. reqwest 0.12
+  picked a provider via the feature name (`rustls-tls` expanded to
+  `__rustls-ring`); 0.13 stopped guessing, and its `rustls` feature bundles
+  aws-lc-rs, whose `-sys` C/asm crate blocks musl cross-compilation. This crate
+  therefore uses `rustls-no-provider` and installs ring itself through the new
+  public `download::install_default_crypto_provider`, which the downloader and
+  the MCP binary both call. Verified unchanged in the lockfile: aws-lc-rs and
+  aws-lc-sys absent, ring present.
+
+  Only the `download` feature is affected; a default (library) build pulls
+  neither reqwest nor rustls.
+
 ### Fixed
 
 - The raw `curl-impersonate` binary path (custom [`Fingerprint`]) now passes

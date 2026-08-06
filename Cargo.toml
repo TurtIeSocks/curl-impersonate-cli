@@ -20,7 +20,7 @@ path = "src/lib.rs"
 default = []
 # Opt-in runtime download of a prebuilt curl-impersonate release into a cache
 # dir (Linux/macOS). Pulls in an HTTP client + tar/gzip extraction.
-download = ["dep:reqwest", "dep:flate2", "dep:tar", "dep:dirs", "tokio/fs"]
+download = ["dep:reqwest", "dep:rustls", "dep:flate2", "dep:tar", "dep:dirs", "tokio/fs"]
 # Build the `curl-impersonate-mcp` stdio MCP server binary, exposing the request
 # API as tools for LLM agents. Pulls in the rmcp SDK; enables `download` so the
 # server can fetch a wrapper on first use. Off the default (library) build.
@@ -34,14 +34,27 @@ tokio     = { version = "1", features = ["process", "io-util", "rt"] }
 thiserror = "2"
 
 # `download` feature only — kept out of the default build.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+# 0.13, matching zendriver-rs and proxybroker-rs so a project using more than one of them
+# compiles a single HTTP stack.
+#
+# `rustls-no-provider`, NOT `rustls`: the latter enables aws-lc-rs, whose -sys C/asm crate
+# blocks musl cross-compilation. 0.12 picked a provider for you via the feature name
+# (`rustls-tls` -> `__rustls-ring`); 0.13 stopped guessing, so ring is installed explicitly
+# before any client is built. That omission is a RUNTIME panic, not a build error — and it
+# fires on client CONSTRUCTION, so even a plain-HTTP request through a fresh client trips it.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"], optional = true }
+# Only to name the ring provider; tracks reqwest's optionality exactly.
+rustls  = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"], optional = true }
 flate2  = { version = "1", optional = true }
 tar     = { version = "0.4", optional = true }
 dirs    = { version = "6", optional = true }
 
 # `mcp` feature only. rmcp re-exports `schemars`, so we derive tool schemas via
 # `rmcp::schemars` and don't depend on it directly.
-rmcp  = { version = "2", features = ["server", "macros", "transport-io"], optional = true }
+# Pinned exactly, matching zendriver-rs and proxybroker-rs: rmcp's macro and transport
+# surface moves across releases, and both of those pin `=2.2.0`, so any project combining
+# them is held there anyway. Relax in all three together or not at all.
+rmcp  = { version = "=2.2.0", features = ["server", "macros", "transport-io"], optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 
 # `json` feature only.
