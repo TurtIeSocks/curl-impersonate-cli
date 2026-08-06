@@ -615,6 +615,20 @@ fn sig_hash_name(id: u16) -> Option<&'static str> {
         0x0809 => "rsa_pss_pss_sha256",
         0x080A => "rsa_pss_pss_sha384",
         0x080B => "rsa_pss_pss_sha512",
+        // ML-DSA, the post-quantum signature algorithms Chrome PREPENDS from
+        // major 150 on. A capture from such a browser carries all three, and
+        // without them `from_raw_arrays` returns `UnknownSigAlg` and the whole
+        // fingerprint is unusable — so a Chrome 150+ device could not be
+        // presented by any route, prebuilt wrapper or captured overlay alike.
+        //
+        // The names are the ones curl-impersonate accepts. They arrived in
+        // v2.0.0 (2026-08-01), whose curl patch defines
+        // `{SSL_SIGN_ML_DSA_44, "mldsa44"}` and siblings; v1.5.6 has no `mldsa`
+        // anywhere, and emitting these against it fails with
+        // `curl: (43) Unknown signature hash algorithm: 'mldsa44'`.
+        0x0904 => "mldsa44",
+        0x0905 => "mldsa65",
+        0x0906 => "mldsa87",
         _ => return None,
     })
 }
@@ -748,6 +762,42 @@ mod tests {
         assert_eq!(curve_name(24), Some("P-384"));
         assert_eq!(curve_name(4588), Some("X25519MLKEM768"));
         assert_eq!(curve_name(9999), None);
+    }
+
+    /// The three post-quantum algorithms Chrome 150+ prepends. Asserted by
+    /// CODEPOINT rather than by name lookup alone: a real Chrome 150 capture
+    /// records its signature algorithms as `2308, 2309, 2310`, and those decimal
+    /// values being exactly 0x0904/0x0905/0x0906 is the thing that has to hold
+    /// for a captured fingerprint to survive `from_raw_arrays`.
+    #[test]
+    fn ml_dsa_signature_algorithms_are_known() {
+        assert_eq!(sig_hash_name(2308), Some("mldsa44"));
+        assert_eq!(sig_hash_name(2309), Some("mldsa65"));
+        assert_eq!(sig_hash_name(2310), Some("mldsa87"));
+        assert_eq!(sig_hash_name(0x0904), Some("mldsa44"));
+        assert_eq!(sig_hash_name(0x0906), Some("mldsa87"));
+    }
+
+    /// A Chrome 150 signature-algorithm list end to end. This is the sequence a
+    /// real capture carries, ML-DSA first; before these three were known the
+    /// whole array was rejected on the first element.
+    #[test]
+    fn a_chrome_150_sig_alg_list_maps_completely() {
+        let chrome150 = [
+            2308u16, 2309, 2310, 1027, 2052, 1025, 1283, 2053, 1281, 2054, 1537,
+        ];
+        let names: Vec<_> = chrome150.iter().map(|&id| sig_hash_name(id)).collect();
+        assert!(
+            names.iter().all(Option::is_some),
+            "every algorithm in a real Chrome 150 ClientHello must map: {:?}",
+            chrome150
+                .iter()
+                .zip(&names)
+                .filter(|(_, n)| n.is_none())
+                .map(|(id, _)| *id)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(names[0], Some("mldsa44"));
     }
 
     #[test]
